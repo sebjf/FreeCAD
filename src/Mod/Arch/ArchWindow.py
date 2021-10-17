@@ -111,7 +111,10 @@ def makeWindow(baseobj=None,width=None,height=None,parts=None,name=None):
                             obj.setExpression(prop, baseobj.Name+"."+p)
 
     if obj.Base and FreeCAD.GuiUp:
-        obj.Base.ViewObject.DisplayMode = "Wireframe"
+        try:
+            obj.Base.ViewObject.DisplayMode = "Wireframe"
+        except ValueError:
+            pass #Not all objects support the wireframe mode
         obj.Base.ViewObject.hide()
         from DraftGui import todo
         todo.delay(recolorize,[obj.Document.Name,obj.Name])
@@ -834,7 +837,7 @@ class _Window(ArchComponent.Component):
                         if shapes:
                             base = Part.makeCompound(shapes)
                     elif not obj.WindowParts:
-                        if not obj.Base.Shape.isNull():
+                        if hasattr(obj.Base,"Shape") and not obj.Base.Shape.isNull():
                             base = obj.Base.Shape.copy()
                             # obj placement is already added by applyShape() below
                             #if not DraftGeomUtils.isNull(pl):
@@ -877,7 +880,8 @@ class _Window(ArchComponent.Component):
                     if not obj.Subvolume.Shape.isNull():
                         sh = obj.Subvolume.Shape.copy()
                         pl = FreeCAD.Placement(sh.Placement)
-                        pl = pl.multiply(obj.Placement)
+                        pl = obj.Base.Placement.multiply(pl)
+                        pl = obj.Placement.multiply(pl)
                         if plac:
                             pl = pl.multiply(plac)
                         sh.Placement = pl
