@@ -220,6 +220,7 @@ class Edit(gui_base_original.Modifier):
         self.edited_objects = []
         self.obj = None
         self.editing = None
+        self.manipulator = None
 
         # event callbacks
         self.selection_callback = None
@@ -350,7 +351,10 @@ class Edit(gui_base_original.Modifier):
         self.unregister_editing_callbacks()
         self.editing = None
         self.finalizeGhost()
-        Gui.Snapper.setSelectMode(False)
+        if self.manipulator is not None:
+            self.manipulator.end()
+            self.manipulator = None
+
         if self.obj and closed:
             if "Closed" in self.obj.PropertiesList:
                 if not self.obj.Closed:
@@ -465,9 +469,14 @@ class Edit(gui_base_original.Modifier):
                     doc = App.getDocument(str(node.documentName.getValue()))
                     obj = doc.getObject(str(node.objectName.getValue()))
 
+                    if event.wasCtrlDown():
+                        self.manipulator = self.SoDragPointDraggerManipulator()
+                    else:
+                        self.manipulator = self.GuiSnapperManipulator()
                     self.startEditing(obj, node_idx)
                 else:
-                    self.endEditing(self.obj, self.editing)
+                    if self.manipulator.onMousePressed(event):
+                        self.endEditing(self.obj, self.editing)
             elif event.wasAltDown():  # left click with ctrl down
                 self.display_tracker_menu(event)
 
@@ -478,7 +487,8 @@ class Edit(gui_base_original.Modifier):
         """
         event = event_callback.getEvent()
         if self.editing is not None:
-            self.updateTrackerAndGhost(event)
+            if self.manipulator is not None:
+                self.manipulator.onMouseMoved(event)
         else:
             # look for a node in mouse position and highlight it
             pos = event.getPosition()
@@ -513,26 +523,23 @@ class Edit(gui_base_original.Modifier):
         self.initGhost(obj)
 
         self.node.append(self.trackers[obj.Name][node_idx].get())
-        Gui.Snapper.setSelectMode(False)
+        self.manipulator.start(self.trackers[self.obj.Name][self.editing].get, self.updateTrackerAndGhost)
         self.hideTrackers()
 
     def updateTrackerAndGhost(self, event):
         """Update tracker position when editing and update ghost."""
-        pos = event.getPosition().getValue()
-        orthoConstrain = False
-        if event.wasShiftDown() == 1:
-            orthoConstrain = True
-        snappedPos = Gui.Snapper.snap((pos[0],pos[1]),self.node[-1], constrain=orthoConstrain)
-        self.trackers[self.obj.Name][self.editing].set(snappedPos)
-        self.ui.displayPoint(snappedPos, self.node[-1])
+        """The event is the new position for the tracked point"""
+        self.trackers[self.obj.Name][self.editing].set(event)
+        self.ui.displayPoint(event, self.node[-1])
         if self.ghost:
-            self.updateGhost(obj=self.obj, node_idx=self.editing, v=snappedPos)
+            self.updateGhost(obj=self.obj, node_idx=self.editing, v=event)
 
     def endEditing(self, obj, nodeIndex, v=None):
         """Terminate editing and start object updating process."""
         self.finalizeGhost()
         self.trackers[obj.Name][nodeIndex].on()
-        Gui.Snapper.setSelectMode(True)
+        self.manipulator.end()
+        self.manipulator = None
         if v is None:
             # endEditing is called by mousePressed
             v = self.trackers[obj.Name][nodeIndex].get()
@@ -548,6 +555,75 @@ class Edit(gui_base_original.Modifier):
         self.showTrackers()
         gui_tool_utils.redraw_3d_view()
 
+    # -------------------------------------------------------------------------
+    # POINT MANIPULATORS
+    # -------------------------------------------------------------------------
+
+    class GuiSnapperManipulator:
+        def start(self, get, set):
+            """Set up the GUI Snapper and callbacks"""
+            self.get = get
+            self.set = set
+            Gui.Snapper.setSelectMode(False)
+
+        def onMouseMoved(self, event):
+            """Converts a mouse moved event into a position update event"""
+            pos = event.getPosition().getValue()
+            orthoConstrain = False
+            if event.wasShiftDown() == 1:
+                orthoConstrain = True
+            snappedPos = Gui.Snapper.snap((pos[0],pos[1]),self.get(), constrain=orthoConstrain)
+            self.set(snappedPos)
+
+        def onMousePressed(self,event):
+            return True
+
+        def end(self):
+            """Put the Snapper settings back"""
+            Gui.Snapper.setSelectMode(True)
+
+    class SoDragPointDraggerManipulator:
+        def start(self, get, set):
+            """Create the Dragger and register the callbacks"""
+            self.get = get
+            self.set = set
+            view = Gui.ActiveDocument.ActiveView
+            self.sg = view.getSceneGraph()
+            self.separator = coin.SoSeparator()
+            self.transform = coin.SoTransform()
+            self.dragger = coin.SoDragPointDragger()
+            self.dragger.translation.setValue(get() / 100)
+            self.transform.scaleFactor.setValue(100,100,100)
+            view.addDraggerCallback(self.dragger, "addMotionCallback", self.draggerCallback)
+            self.separator.addChild(self.transform)
+            self.separator.addChild(self.dragger)
+            self.sg.addChild(self.separator)
+
+        def draggerCallback(self, event):
+            v = App.Vector(event.translation.getValue() * 100)
+            self.set(v)
+
+        def onMouseMoved(self, event):
+            """Converts a mouse moved event into a position update event"""
+            """This doesn't do anything for the DragPointDragger as the widget
+            will handle its own UI"""
+
+        def onMousePressed(self, event):
+            #Determine what was clicked to decide what to do
+            view = Gui.ActiveDocument.ActiveView
+            render_manager = view.getViewer().getSoRenderManager()
+            ray_pick = coin.SoRayPickAction(render_manager.getViewportRegion())
+            ray_pick.setPoint(coin.SbVec2s(*event.getPosition()))
+            ray_pick.apply(render_manager.getSceneGraph())
+            picked_points = ray_pick.getPickedPointList()
+            if event.wasCtrlDown():
+                self.dragger.showNextDraggerSet()
+            return picked_points.getLength() <= 0 #If the user clicked on the background
+
+        def end(self):
+            """Clean up the dragger"""
+            from PySide import QtCore
+            QtCore.QTimer.singleShot(0, lambda: self.sg.removeChild(self.separator)) #The callback that removes this comes from a scene.traverse(), so we shouldn't modify the scene graph in the callback itself
 
     # -------------------------------------------------------------------------
     # EDIT TRACKERS functions
