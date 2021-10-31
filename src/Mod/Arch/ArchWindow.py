@@ -105,7 +105,7 @@ def makeWindow(baseobj=None,width=None,height=None,parts=None,name=None):
                     obj.WindowParts = ["Default","Frame",ws,"1","0"]
             else:
                 # bind properties from base obj if existing
-                for prop in ["Height","Width","Subvolume","Tag","Description","Material"]:
+                for prop in ["Height","Width","Subvolume","Tag","Description"]:
                     for p in baseobj.PropertiesList:
                         if (p == prop) or p.endswith("_"+prop):
                             obj.setExpression(prop, baseobj.Name+"."+p)
